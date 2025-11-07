@@ -34,8 +34,18 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   
-  // UI State
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  // UI State - Load dark mode preference from localStorage
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const saved = localStorage.getItem('darkMode');
+        return saved !== null ? saved === 'true' : true;
+      }
+    } catch (e) {
+      console.warn('localStorage not available:', e);
+    }
+    return true;
+  });
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [panelWidth, setPanelWidth] = useState(380);
@@ -147,7 +157,9 @@ const App: React.FC = () => {
       }
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault();
-        setIsDarkMode(prev => !prev);
+        const newMode = !isDarkMode;
+        setIsDarkMode(newMode);
+        localStorage.setItem('darkMode', String(newMode));
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         e.preventDefault();
@@ -457,13 +469,13 @@ const App: React.FC = () => {
       return;
     }
 
-    const newMessages: ChatMessage[] = [...messages, { role: 'user', content: userInput }];
+    const newMessages: ChatMessage[] = [...messages, { role: 'user' as const, content: userInput }];
     setMessages(newMessages);
     setIsLoading(true);
 
     try {
       const aiResponse = await getAIResponse(userInput, sheetData);
-      const updatedMessages = [...newMessages, { role: 'assistant', content: aiResponse.text }];
+      const updatedMessages: ChatMessage[] = [...newMessages, { role: 'assistant' as const, content: aiResponse.text }];
       setMessages(updatedMessages);
       if (aiResponse.action) {
         handleSheetAction(aiResponse.action);
@@ -471,7 +483,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error getting AI response:", error);
       showNotification('Failed to get AI response', 'error');
-      setMessages([...newMessages, { role: 'assistant', content: "Sorry, I encountered an error." }]);
+      setMessages([...newMessages, { role: 'assistant' as const, content: "Sorry, I encountered an error." }]);
     } finally {
       setIsLoading(false);
     }
@@ -715,8 +727,13 @@ const App: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setIsDarkMode(prev => !prev)}
+              onClick={() => {
+                const newMode = !isDarkMode;
+                setIsDarkMode(newMode);
+                localStorage.setItem('darkMode', String(newMode));
+              }}
               className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors"
+              title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {isDarkMode ? (
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -132,8 +132,12 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
       // Double click to edit
       setEditingCell({ row, col });
       setEditValue(String(data[row][col] || ''));
+    } else if (e.detail === 1) {
+      // Single click - just select the cell
+      setMultiSelectStart({ row, col });
+      setSelectedRange(new Set([cellKey(row, col)]));
     }
-  }, [data]);
+  }, [data, cellKey]);
 
   const handleCellChange = useCallback((e: React.FocusEvent<HTMLDivElement>, row: number, col: keyof SpreadsheetRow) => {
     const newValue = e.currentTarget.textContent || '';
@@ -147,7 +151,14 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
   }, []);
 
   const handleEditKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Allow backspace and other editing keys to work normally
+    if (e.key === 'Backspace' || e.key === 'Delete' || e.key.length === 1) {
+      // Let the input handle these keys normally
+      return;
+    }
+    
     if (e.key === 'Enter') {
+      e.preventDefault();
       if (editingCell) {
         const col = editingCell.col as keyof SpreadsheetRow;
         onUpdateData(editingCell.row, col, editValue);
@@ -162,6 +173,7 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
         }
       }
     } else if (e.key === 'Escape') {
+      e.preventDefault();
       setEditingCell(null);
     } else if (e.key === 'Tab') {
       e.preventDefault();
@@ -187,6 +199,12 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
   
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't interfere if user is editing a cell or typing in an input/textarea
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
       if (!selectedRange.size && !multiSelectStart) return;
 
       // Copy (Ctrl/Cmd + C)
@@ -207,8 +225,8 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
         handleCut();
       }
 
-      // Delete
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      // Delete (only Delete key, not Backspace, to avoid conflicts)
+      if (e.key === 'Delete') {
         e.preventDefault();
         handleDelete();
       }
@@ -218,11 +236,21 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
         e.preventDefault();
         selectAll();
       }
+
+      // F2 or Enter to edit selected cell
+      if ((e.key === 'F2' || e.key === 'Enter') && multiSelectStart && selectedRange.size === 1) {
+        e.preventDefault();
+        const cellKey = Array.from(selectedRange)[0];
+        const [rowStr, col] = cellKey.split('-');
+        const row = parseInt(rowStr);
+        setEditingCell({ row, col });
+        setEditValue(String(data[row][col] || ''));
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedRange, multiSelectStart, data, columns]);
+  }, [selectedRange, multiSelectStart, data, columns, handleCopy, handlePaste, handleCut, handleDelete, selectAll]);
 
   // ========== Clipboard Operations ==========
   

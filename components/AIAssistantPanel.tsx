@@ -44,9 +44,7 @@ export const AIAssistantPanel: React.FC<AIAssistantPanelProps> = ({
       e.preventDefault();
       handleSend();
     }
-    if (e.key === "Backspace" && !input) {
-      e.preventDefault();
-    }
+    // Allow backspace to work normally - remove the prevention
   };
 
   return (
@@ -67,14 +65,17 @@ export const AIAssistantPanel: React.FC<AIAssistantPanelProps> = ({
 
       {/* Chart Display */}
       {chartData && (
-        <div className="p-4 border-b border-gray-200 dark:border-[#2d2d2d]">
-          <Chart {...chartData} onSave={handleSaveChart} />
-          <button 
-            onClick={onClearChart}
-            className="mt-2 w-full text-center text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-          >
-            Clear Chart
-          </button>
+        <div className="flex-shrink-0 p-4 border-b border-gray-200 dark:border-[#2d2d2d] max-h-96 overflow-y-auto">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Chart Preview</span>
+            <button 
+              onClick={onClearChart}
+              className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors"
+            >
+              ✕ Close
+            </button>
+          </div>
+          <Chart {...chartData} onSave={handleSaveChart} isDarkMode={isDarkMode} />
         </div>
       )}
 

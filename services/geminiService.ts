@@ -3,11 +3,18 @@ import type { AIResponse, FunctionCallAction, SpreadsheetRow } from '../types';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
-if (!API_KEY) {
-  throw new Error("VITE_GEMINI_API_KEY is not set. Please set it in your .env.local file.");
-}
+// Don't throw error immediately - let the app load and handle it gracefully
+let genAI: GoogleGenerativeAI | null = null;
 
-const genAI = new GoogleGenerativeAI(API_KEY);
+if (API_KEY) {
+  try {
+    genAI = new GoogleGenerativeAI(API_KEY);
+  } catch (error) {
+    console.error('Failed to initialize Gemini AI:', error);
+  }
+} else {
+  console.warn('VITE_GEMINI_API_KEY is not set. Please set it in your .env.local file.');
+}
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -24,27 +31,31 @@ const getRetryDelay = (attempt: number): number => {
   return exponentialDelay + jitter;
 };
 
-const model = genAI.getGenerativeModel({
-  model: "gemini-flash-latest", // Changed to more stable model
-  safetySettings: [
-    {
-      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-      threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-  ],
-  tools: [
+const getModel = () => {
+  if (!genAI) {
+    throw new Error('Gemini AI is not initialized. Please set VITE_GEMINI_API_KEY.');
+  }
+  return genAI.getGenerativeModel({
+    model: "gemini-flash-latest", // Changed to more stable model
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+    ],
+    tools: [
     {
       functionDeclarations: [
         {
@@ -439,13 +450,21 @@ const model = genAI.getGenerativeModel({
       ],
     },
   ],
-});
+  });
+};
 
 export const getAIResponse = async (
   userInput: string, 
   sheetData: SpreadsheetRow[],
   onRetry?: (attempt: number, delay: number) => void
 ): Promise<AIResponse> => {
+  // Check if API key is configured
+  if (!API_KEY || !genAI) {
+    return { 
+      text: '⚠️ API Key Not Configured\n\nPlease set your VITE_GEMINI_API_KEY in a .env.local file.\n\n1. Create a .env.local file in the VectorSheets directory\n2. Add: VITE_GEMINI_API_KEY=your_api_key_here\n3. Get your API key from: https://makersuite.google.com/app/apikey\n4. Restart the development server' 
+    };
+  }
+
   if (userInput.toLowerCase().includes('chart') && !userInput.toLowerCase().includes('bar') && !userInput.toLowerCase().includes('line') && !userInput.toLowerCase().includes('pie')) {
     return { text: 'What type of chart would you like to generate? (e.g., bar, line, pie)' };
   }
@@ -454,6 +473,7 @@ export const getAIResponse = async (
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
+      const model = getModel();
       const chat = model.startChat();
       const result = await chat.sendMessage([
         { text: `You are a data analyst assistant. Here is the current spreadsheet data in JSON format: ${JSON.stringify(sheetData)}` },
