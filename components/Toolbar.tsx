@@ -10,10 +10,15 @@ interface MenuItem {
   label: string;
   action: string;
   shortcut?: string;
-  divider?: boolean;
   submenu?: MenuItem[];
   icon?: string;
 }
+
+interface MenuDivider {
+  divider: true;
+}
+
+type MenuElement = MenuItem | MenuDivider;
 
 export const Toolbar: React.FC<ToolbarProps> = ({ onAction, isDarkMode, onFormatChange }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
@@ -36,7 +41,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({ onAction, isDarkMode, onFormat
   const fonts = ['Inter', 'Roboto', 'Open Sans', 'Arial', 'Times New Roman', 'Courier New', 'Georgia'];
   const colors = ['#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#FF6600', '#009900'];
 
-  const menus: Record<string, MenuItem[]> = {
+  const menus: Record<string, MenuElement[]> = {
     File: [
       { label: 'New', action: 'new_file', shortcut: '⌘N' },
       { label: 'Open', action: 'open_file', shortcut: '⌘O' },
@@ -172,7 +177,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({ onAction, isDarkMode, onFormat
               <div className="absolute top-full left-0 mt-0 w-48 bg-white dark:bg-[#252526] border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-50">
                 {menus[menuName].map((item, idx) => (
                   <div key={idx}>
-                    {item.divider ? (
+                    {'divider' in item ? (
                       <div className="my-1 border-t border-gray-200 dark:border-gray-700"></div>
                     ) : (
                       <button

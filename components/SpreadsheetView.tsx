@@ -195,8 +195,97 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     }
   }, [editingCell, editValue, data, columns, onUpdateData]);
 
-  // ========== Keyboard Shortcuts ==========
-  
+  // ========== Clipboard Operations ==========  
+  const handleDelete = useCallback(() => {
+    selectedRange.forEach(key => {
+      const [rowStr, col] = key.split('-');
+      const row = parseInt(rowStr);
+      onUpdateData(row, col as keyof SpreadsheetRow, '');
+    });
+
+    console.log('🗑️ Deleted', selectedRange.size, 'cells');
+  }, [selectedRange, onUpdateData]);
+
+  const handleCopy = useCallback(() => {
+    if (selectedRange.size === 0) return;
+
+    const rows: Array<Record<string, any>> = [];
+    const cellArray = Array.from(selectedRange);
+    
+    cellArray.forEach(key => {
+      const [rowStr, col] = key.split('-');
+      const row = parseInt(rowStr);
+      
+      if (!rows[row]) rows[row] = {};
+      rows[row][col] = data[row][col];
+    });
+
+    const csv = rows.map(row => 
+      columns.map(col => row[col] || '').join('\t')
+    ).join('\n');
+
+    setClipboard(csv);
+    setCopiedCells(rows as any);
+
+    // Also copy to system clipboard
+    navigator.clipboard.writeText(csv).catch(console.error);
+
+    console.log('📋 Copied to clipboard');
+  }, [selectedRange, data, columns]);
+
+  const handleCut = useCallback(() => {
+    handleCopy();
+    handleDelete();
+  }, [handleCopy, handleDelete]);
+
+  const handlePaste = useCallback(() => {
+    if (clipboard && multiSelectStart) {
+      const lines = clipboard.split('\n');
+      const updates: Array<{ rowIndex: number; column: string; value: any }> = [];
+
+      lines.forEach((line, lineIdx) => {
+        const values = line.split('\t');
+        const rowIdx = multiSelectStart.row + lineIdx;
+
+        if (rowIdx < data.length) {
+          values.forEach((value, colIdx) => {
+            const col = columns[colIdx];
+            if (col && value) {
+              updates.push({
+                rowIndex: rowIdx,
+                column: col,
+                value: isNaN(Number(value)) ? value : Number(value)
+              });
+            }
+          });
+        }
+      });
+
+      // Apply batch update
+      updates.forEach(update => {
+        onUpdateData(update.rowIndex, update.column as keyof SpreadsheetRow, update.value);
+      });
+
+      console.log('📝 Pasted', updates.length, 'cells');
+    } else {
+      navigator.clipboard.readText().then(text => {
+        setClipboard(text);
+      }).catch(console.error);
+    }
+  }, [clipboard, multiSelectStart, data, columns, onUpdateData]);
+
+  const selectAll = useCallback(() => {
+    const allCells = new Set<string>();
+    data.forEach((_, row) => {
+      columns.forEach(col => {
+        allCells.add(cellKey(row, col));
+      });
+    });
+    setSelectedRange(allCells);
+    console.log('✅ Selected all', allCells.size, 'cells');
+  }, [data, columns, cellKey]);
+
+  // ========== Keyboard Shortcuts ==========  
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't interfere if user is editing a cell or typing in an input/textarea
@@ -251,97 +340,6 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedRange, multiSelectStart, data, columns, handleCopy, handlePaste, handleCut, handleDelete, selectAll]);
-
-  // ========== Clipboard Operations ==========
-  
-  const handleCopy = useCallback(() => {
-    if (selectedRange.size === 0) return;
-
-    const rows: Array<Record<string, any>> = [];
-    const cellArray = Array.from(selectedRange);
-    
-    cellArray.forEach(key => {
-      const [rowStr, col] = key.split('-');
-      const row = parseInt(rowStr);
-      
-      if (!rows[row]) rows[row] = {};
-      rows[row][col] = data[row][col];
-    });
-
-    const csv = rows.map(row => 
-      columns.map(col => row[col] || '').join('\t')
-    ).join('\n');
-
-    setClipboard(csv);
-    setCopiedCells(rows as any);
-
-    // Also copy to system clipboard
-    navigator.clipboard.writeText(csv).catch(console.error);
-
-    console.log('📋 Copied to clipboard');
-  }, [selectedRange, data, columns]);
-
-  const handleCut = useCallback(() => {
-    handleCopy();
-    handleDelete();
-  }, [selectedRange]);
-
-  const handlePaste = useCallback(() => {
-    if (clipboard && multiSelectStart) {
-      const lines = clipboard.split('\n');
-      const updates: Array<{ rowIndex: number; column: string; value: any }> = [];
-
-      lines.forEach((line, lineIdx) => {
-        const values = line.split('\t');
-        const rowIdx = multiSelectStart.row + lineIdx;
-
-        if (rowIdx < data.length) {
-          values.forEach((value, colIdx) => {
-            const col = columns[colIdx];
-            if (col && value) {
-              updates.push({
-                rowIndex: rowIdx,
-                column: col,
-                value: isNaN(Number(value)) ? value : Number(value)
-              });
-            }
-          });
-        }
-      });
-
-      // Apply batch update
-      updates.forEach(update => {
-        onUpdateData(update.rowIndex, update.column as keyof SpreadsheetRow, update.value);
-      });
-
-      console.log('📝 Pasted', updates.length, 'cells');
-    } else {
-      navigator.clipboard.readText().then(text => {
-        setClipboard(text);
-      }).catch(console.error);
-    }
-  }, [clipboard, multiSelectStart, data, columns, onUpdateData]);
-
-  const handleDelete = useCallback(() => {
-    selectedRange.forEach(key => {
-      const [rowStr, col] = key.split('-');
-      const row = parseInt(rowStr);
-      onUpdateData(row, col as keyof SpreadsheetRow, '');
-    });
-
-    console.log('🗑️ Deleted', selectedRange.size, 'cells');
-  }, [selectedRange, onUpdateData]);
-
-  const selectAll = useCallback(() => {
-    const allCells = new Set<string>();
-    data.forEach((_, row) => {
-      columns.forEach(col => {
-        allCells.add(cellKey(row, col));
-      });
-    });
-    setSelectedRange(allCells);
-    console.log('✅ Selected all', allCells.size, 'cells');
-  }, [data, columns]);
 
   // ========== Context Menu ==========
   

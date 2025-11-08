@@ -32,7 +32,7 @@ interface ChartProps extends ChartData {
 }
 
 const Chart: React.FC<ChartProps> = ({ chartType, labels, datasets, title, onSave, isDarkMode = false }) => {
-  const chartRef = useRef<ChartJS>(null);
+  const chartRef = useRef<any>(null);
 
   const colors = {
     pie: ['#4299E1', '#48BB78', '#F56565', '#ED8936', '#ECC94B', '#9F7AEA', '#38B2AC', '#805AD5', '#E53E3E', '#DD6B20'],

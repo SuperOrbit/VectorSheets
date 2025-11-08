@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from '@google/generative-ai';
+import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory, SchemaType } from '@google/generative-ai';
 import type { AIResponse, FunctionCallAction, SpreadsheetRow } from '../types';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -62,14 +62,14 @@ const getModel = () => {
           name: "sort_data",
           description: "Sorts the spreadsheet data by a specified column in ascending or descending order.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               column: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The column to sort by (e.g., 'sales', 'cost', 'profit', 'month', 'product', 'region').",
               },
               order: {
-                type: "string",
+                type: SchemaType.STRING,
                 enum: ["ascending", "descending"],
                 description: "Sort order: 'ascending' or 'descending'.",
               },
@@ -81,23 +81,23 @@ const getModel = () => {
           name: "calculate_aggregate",
           description: "Calculates sum, average, min, max, or count for a specific column. Can filter by region, product, or month if specified.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               column: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Column to calculate on (e.g., 'sales', 'cost', 'profit').",
               },
               operation: {
-                type: "string",
+                type: SchemaType.STRING,
                 enum: ["sum", "average", "min", "max", "count"],
                 description: "Type of calculation: sum, average, min, max, or count.",
               },
               filterColumn: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Optional: Column to filter by (e.g., 'region', 'product', 'month').",
               },
               filterValue: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Optional: Value to filter for (e.g., 'North', 'Product A', 'January').",
               },
             },
@@ -108,14 +108,14 @@ const getModel = () => {
           name: "filter_data",
           description: "Filters spreadsheet data based on a column and value to show only matching rows.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               column: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Column to filter by (e.g., 'region', 'product', 'month').",
               },
               value: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Value to filter for (case-insensitive partial match).",
               },
             },
@@ -126,14 +126,14 @@ const getModel = () => {
           name: "add_row",
           description: "Adds a new row to the spreadsheet with the specified data.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
-              month: { type: "string", description: "Month name (e.g., 'January')" },
-              product: { type: "string", description: "Product name (e.g., 'Product A')" },
-              region: { type: "string", description: "Region name (e.g., 'North')" },
-              sales: { type: "number", description: "Sales amount" },
-              cost: { type: "number", description: "Cost amount" },
-              profit: { type: "number", description: "Profit amount" },
+              month: { type: SchemaType.STRING, description: "Month name (e.g., 'January')" },
+              product: { type: SchemaType.STRING, description: "Product name (e.g., 'Product A')" },
+              region: { type: SchemaType.STRING, description: "Region name (e.g., 'North')" },
+              sales: { type: SchemaType.NUMBER, description: "Sales amount" },
+              cost: { type: SchemaType.NUMBER, description: "Cost amount" },
+              profit: { type: SchemaType.NUMBER, description: "Profit amount" },
             },
             required: ["month", "product", "region", "sales", "cost", "profit"],
           },
@@ -142,18 +142,18 @@ const getModel = () => {
           name: "update_cell",
           description: "Updates a specific cell value in the spreadsheet by row index and column name.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               rowIndex: {
-                type: "number",
+                type: SchemaType.NUMBER,
                 description: "Row index (0-based) to update. First row is 0, second is 1, etc.",
               },
               column: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Column to update (e.g., 'sales', 'cost', 'profit', 'product', 'region', 'month').",
               },
               value: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "New value to set (will be converted to number for numeric columns).",
               },
             },
@@ -164,14 +164,14 @@ const getModel = () => {
           name: "find_top_n",
           description: "Finds and displays the top N rows ranked by a specified column value (highest to lowest).",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               column: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "Column to rank by (e.g., 'sales', 'profit', 'cost').",
               },
               n: {
-                type: "number",
+                type: SchemaType.NUMBER,
                 description: "Number of top results to return (e.g., 5 for top 5).",
               },
             },
@@ -182,12 +182,12 @@ const getModel = () => {
           name: "delete_rows",
           description: "Deletes one or more rows from the spreadsheet based on their indices.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               rowIndices: {
-                type: "array",
+                type: SchemaType.ARRAY,
                 items: {
-                  type: "number",
+                  type: SchemaType.NUMBER,
                 },
                 description: "An array of 0-based row indices to delete.",
               },
@@ -199,12 +199,12 @@ const getModel = () => {
           name: "delete_columns",
           description: "Deletes one or more columns from the spreadsheet based on their names.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               columnNames: {
-                type: "array",
+                type: SchemaType.ARRAY,
                 items: {
-                  type: "string",
+                  type: SchemaType.STRING,
                 },
                 description: "An array of column names to delete.",
               },
@@ -216,14 +216,14 @@ const getModel = () => {
           name: "add_column",
           description: "Adds a new column to the spreadsheet.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               columnName: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The name of the new column.",
               },
               defaultValue: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The default value for the new column.",
               },
             },
@@ -234,20 +234,20 @@ const getModel = () => {
           name: "format_cells",
           description: "Applies formatting to a range of cells.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               range: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The range of cells to format (e.g., 'A1:C5').",
               },
               format: {
-                type: "object",
+                type: SchemaType.OBJECT,
                 properties: {
-                  bold: { type: "boolean" },
-                  italic: { type: "boolean" },
-                  underline: { type: "boolean" },
-                  fontColor: { type: "string" },
-                  backgroundColor: { type: "string" },
+                  bold: { type: SchemaType.BOOLEAN },
+                  italic: { type: SchemaType.BOOLEAN },
+                  underline: { type: SchemaType.BOOLEAN },
+                  fontColor: { type: SchemaType.STRING },
+                  backgroundColor: { type: SchemaType.STRING },
                 },
               },
             },
@@ -258,10 +258,10 @@ const getModel = () => {
           name: "merge_cells",
           description: "Merges a range of cells.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               range: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The range of cells to merge (e.g., 'A1:C1').",
               },
             },
@@ -272,14 +272,14 @@ const getModel = () => {
           name: "apply_formula",
           description: "Applies a formula to a cell.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               cell: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The cell to apply the formula to (e.g., 'A1').",
               },
               formula: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The formula to apply (e.g., '=SUM(B1:B5)').",
               },
             },
@@ -290,10 +290,10 @@ const getModel = () => {
           name: "duplicate_sheet",
           description: "Duplicates the current sheet.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               newName: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The name of the new duplicated sheet.",
               },
             },
@@ -304,10 +304,10 @@ const getModel = () => {
           name: "rename_sheet",
           description: "Renames the current sheet.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               newName: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The new name for the current sheet.",
               },
             },
@@ -318,16 +318,16 @@ const getModel = () => {
           name: "batch_update",
           description: "Performs a batch of updates to the spreadsheet.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               updates: {
-                type: "array",
+                type: SchemaType.ARRAY,
                 items: {
-                  type: "object",
+                  type: SchemaType.OBJECT,
                   properties: {
-                    rowIndex: { type: "number" },
-                    column: { type: "string" },
-                    value: { type: "string" },
+                    rowIndex: { type: SchemaType.NUMBER },
+                    column: { type: SchemaType.STRING },
+                    value: { type: SchemaType.STRING },
                   },
                   required: ["rowIndex", "column", "value"],
                 },
@@ -340,24 +340,24 @@ const getModel = () => {
           name: "pivot_table",
           description: "Creates a pivot table from the data.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               rows: {
-                type: "array",
-                items: { type: "string" },
+                type: SchemaType.ARRAY,
+                items: { type: SchemaType.STRING },
                 description: "The columns to use as rows in the pivot table.",
               },
               columns: {
-                type: "array",
-                items: { type: "string" },
+                type: SchemaType.ARRAY,
+                items: { type: SchemaType.STRING },
                 description: "The columns to use as columns in the pivot table.",
               },
               values: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The column to use for the values in the pivot table.",
               },
               aggregator: {
-                type: "string",
+                type: SchemaType.STRING,
                 enum: ["sum", "average", "count"],
                 description: "The aggregation function to use.",
               },
@@ -369,23 +369,23 @@ const getModel = () => {
           name: "create_chart",
           description: "Creates a chart from the data.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               chartType: {
-                type: "string",
+                type: SchemaType.STRING,
                 enum: ["bar", "line", "pie"],
                 description: "The type of chart to create.",
               },
               title: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The title of the chart.",
               },
               xAxis: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The column to use for the x-axis.",
               },
               yAxis: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The column to use for the y-axis.",
               },
             },
@@ -396,7 +396,7 @@ const getModel = () => {
           name: "clear_filter",
           description: "Clears any active filters on the spreadsheet.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {},
           },
         },
@@ -404,33 +404,33 @@ const getModel = () => {
           name: "generate_chart",
           description: "Generates a chart from the spreadsheet data.",
           parameters: {
-            type: "object",
+            type: SchemaType.OBJECT,
             properties: {
               chartType: {
-                type: "string",
+                type: SchemaType.STRING,
                 enum: ["bar", "line", "pie"],
                 description: "The type of chart to generate.",
               },
               labels: {
-                type: "array",
+                type: SchemaType.ARRAY,
                 items: {
-                  type: "string",
+                  type: SchemaType.STRING,
                 },
                 description: "The labels for the x-axis.",
               },
               datasets: {
-                type: "array",
+                type: SchemaType.ARRAY,
                 items: {
-                  type: "object",
+                  type: SchemaType.OBJECT,
                   properties: {
                     label: {
-                      type: "string",
+                      type: SchemaType.STRING,
                       description: "The label for the dataset.",
                     },
                     data: {
-                      type: "array",
+                      type: SchemaType.ARRAY,
                       items: {
-                        type: "number",
+                        type: SchemaType.NUMBER,
                       },
                       description: "The data points for the dataset.",
                     },
@@ -440,7 +440,7 @@ const getModel = () => {
                 description: "The datasets for the chart.",
               },
               title: {
-                type: "string",
+                type: SchemaType.STRING,
                 description: "The title of the chart.",
               },
             },
