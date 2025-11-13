@@ -12,6 +12,23 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: Date;
+  id?: string;
+  feedback?: 'positive' | 'negative' | null;
+  canUndo?: boolean;
+  canRedo?: boolean;
+}
+
+export interface Suggestion {
+  text: string;
+  category: 'analysis' | 'formula' | 'filter' | 'sort' | 'chart' | 'general';
+  icon?: string;
+}
+
+export interface Collaborator {
+  id: string;
+  name: string;
+  avatar?: string;
+  isActive: boolean;
 }
 
 export interface FunctionCallAction {
@@ -32,6 +49,12 @@ export interface AIResponse {
   text: string;
   action?: FunctionCallAction;
   actions?: FunctionCallAction[];
+  error?: {
+    type: 'network' | 'rate_limit' | 'quota' | 'auth' | 'unknown';
+    message: string;
+    canRetry: boolean;
+    timestamp: string;
+  };
 }
 
 export interface HistoryEntry {
@@ -79,4 +102,10 @@ export interface Sheet {
   name: string;
   data: SpreadsheetRow[];
   metadata?: Record<string, any>;
+}
+
+export interface ConversationContext {
+  actions: FunctionCallAction[];
+  insights: string[];
+  lastQuery: string;
 }

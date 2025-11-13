@@ -1,3 +1,5 @@
+import { designTokens } from './design-tokens';
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class',
@@ -8,13 +10,14 @@ export default {
   theme: {
     extend: {
       colors: {
+        ...designTokens.colors,
         'vscode-bg': '#1e1e1e',
         'vscode-sidebar': '#252526',
         'vscode-border': '#3e3e42',
       },
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
+        sans: designTokens.typography.fonts.sans.split(', '),
+        mono: designTokens.typography.fonts.mono.split(', '),
       },
       animation: {
         'fadeIn': 'fadeIn 0.3s ease-out',

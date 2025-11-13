@@ -1,7 +1,10 @@
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory, SchemaType } from '@google/generative-ai';
-import type { AIResponse, FunctionCallAction, SpreadsheetRow } from '../types';
+import type { AIResponse, ConversationContext, FunctionCallAction, SpreadsheetRow } from '../types';
+
+export type ModelMode = 'auto' | 'max' | 'gemini-pro' | 'gemini-flash';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
 
 // Don't throw error immediately - let the app load and handle it gracefully
 let genAI: GoogleGenerativeAI | null = null;
@@ -31,12 +34,143 @@ const getRetryDelay = (attempt: number): number => {
   return exponentialDelay + jitter;
 };
 
-const getModel = () => {
+// ADD: More intelligent prompt engineering
+const buildSystemPrompt = (data: SpreadsheetRow[], context: ConversationContext) => {
+  return `You are VectorSheet AI, an expert data analyst assistant.
+
+CURRENT DATA SUMMARY:
+- Total Rows: ${data.length}
+- Columns: ${Object.keys(data[0] || {}).join(', ')}
+
+AVAILABLE COLUMNS & TYPES:
+${Object.keys(data[0] || {}).map(col => {
+  const sampleValue = data[0][col];
+  const type = typeof sampleValue === 'number' ? 'numeric' : 'text';
+  return `- ${col}: ${type}`;
+}).join('\n')}
+
+RECENT ACTIONS:
+${context.actions.slice(-3).map(a => `- ${a.name}: ${JSON.stringify(a.args)}`).join('\n')}
+
+INSTRUCTIONS:
+1. Understand the user's intent from natural language
+2. Use appropriate functions to answer questions
+3. Provide clear, concise explanations
+4. Suggest follow-up actions when relevant
+5. Format numbers with proper thousand separators
+6. Always validate data before operations
+
+When user asks vague questions like "analyze this", provide:
+- Key statistics (sum, average, min, max)
+- Trends and patterns
+- Outliers or anomalies
+- Actionable insights`;
+};
+
+// ADD: Multi-step reasoning
+const planMultiStepOperation = (userInput: string, data: SpreadsheetRow[]) => {
+  // Break complex queries into steps
+  // Example: "Show me top 5 products by profit in the North region"
+  // Step 1: Filter by North
+  // Step 2: Find top 5 by profit
+  // Step 3: Display results
+};
+
+
+
+// ADD: Better function declarations
+const ENHANCED_FUNCTIONS = [
+  {
+    name: "analyze_data",
+    description: "Performs comprehensive analysis including trends, outliers, correlations, and insights",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        columns: {
+          type: SchemaType.ARRAY,
+          items: { type: SchemaType.STRING },
+          description: "Columns to analyze. If empty, analyzes all numeric columns."
+        },
+        analysisType: {
+          type: SchemaType.STRING,
+          enum: ["summary", "trends", "outliers", "correlations", "full"],
+          description: "Type of analysis to perform"
+        }
+      }
+    }
+  },
+  {
+    name: "generate_formula",
+    description: "Generates Excel/Google Sheets formulas from natural language",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        description: {
+          type: SchemaType.STRING,
+          description: "What the formula should calculate (e.g., 'calculate profit margin')"
+        },
+        targetColumn: {
+          type: SchemaType.STRING,
+          description: "Column where formula result should go"
+        }
+      },
+      required: ["description"]
+    }
+  },
+  {
+    name: "smart_search",
+    description: "Searches data using natural language queries with fuzzy matching",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        query: {
+          type: SchemaType.STRING,
+          description: "Natural language search query"
+        },
+        maxResults: {
+          type: SchemaType.NUMBER,
+          description: "Maximum number of results to return"
+        }
+      },
+      required: ["query"]
+    }
+  }
+];
+
+// Determine if a query is complex (requires gemini-pro)
+const isComplexQuery = (userInput: string): boolean => {
+  const complexKeywords = [
+    'analyze', 'analysis', 'correlation', 'trend', 'insight', 'pattern',
+    'complex', 'multi-step', 'detailed', 'comprehensive', 'deep', 'thorough',
+    'reasoning', 'explain why', 'what if', 'predict', 'forecast'
+  ];
+  const queryLower = userInput.toLowerCase();
+  return complexKeywords.some(keyword => queryLower.includes(keyword)) || userInput.length > 200;
+};
+
+// Get the actual model name based on mode
+const getModelName = (mode: ModelMode, userInput: string): string => {
+  switch (mode) {
+    case 'max':
+      return 'gemini-pro-latest';
+    case 'gemini-pro':
+      return 'gemini-pro-latest';
+    case 'gemini-flash':
+      return 'gemini-flash-latest';
+    case 'auto':
+    default:
+      // Auto mode: use pro for complex queries, flash for simple ones
+      return isComplexQuery(userInput) ? 'gemini-pro-latest' : 'gemini-flash-latest';
+  }
+};
+
+const getModel = (mode: ModelMode = 'auto', userInput: string = '') => {
   if (!genAI) {
     throw new Error('Gemini AI is not initialized. Please set VITE_GEMINI_API_KEY.');
   }
+  const modelName = getModelName(mode, userInput);
   return genAI.getGenerativeModel({
-    model: "gemini-flash-latest", // Changed to more stable model
+    model: modelName,
     safetySettings: [
       {
         category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -456,7 +590,9 @@ const getModel = () => {
 export const getAIResponse = async (
   userInput: string, 
   sheetData: SpreadsheetRow[],
-  onRetry?: (attempt: number, delay: number) => void
+  context: ConversationContext,
+  onRetry?: (attempt: number, delay: number) => void,
+  modelMode: ModelMode = 'auto'
 ): Promise<AIResponse> => {
   // Check if API key is configured
   if (!API_KEY || !genAI) {
@@ -470,13 +606,20 @@ export const getAIResponse = async (
   }
 
   let lastError: any;
+  const systemPrompt = buildSystemPrompt(sheetData, context);
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const model = getModel();
-      const chat = model.startChat();
+      const model = getModel(modelMode, userInput);
+      const generationConfig = modelMode === 'max' ? {
+        temperature: 0.7,
+        maxOutputTokens: 8192,
+      } : undefined;
+      const chat = model.startChat({
+        generationConfig,
+      });
       const result = await chat.sendMessage([
-        { text: `You are a data analyst assistant. Here is the current spreadsheet data in JSON format: ${JSON.stringify(sheetData)}` },
+        { text: systemPrompt },
         { text: `Analyze this request and use appropriate functions to help: ${userInput}` },
       ]);
 
@@ -528,21 +671,69 @@ export const getAIResponse = async (
     }
   }
 
-  // All retries failed
-  console.error("All retry attempts failed:", lastError.message);
+  // All retries failed - Enhanced error handling
+  console.error("All retry attempts failed:", lastError);
+  
+  // Log error for debugging
+  const errorLog = {
+    timestamp: new Date().toISOString(),
+    error: lastError.message || 'Unknown error',
+    stack: lastError.stack,
+    userInput: userInput.substring(0, 100), // Log first 100 chars
+    modelMode,
+    retryAttempts: MAX_RETRIES + 1,
+  };
+  
+  // Log to console (in production, send to error tracking service)
+  console.error('AI Error Log:', errorLog);
+  
+  // Store in localStorage for debugging (optional)
+  try {
+    const errorHistory = JSON.parse(localStorage.getItem('ai_error_history') || '[]');
+    errorHistory.push(errorLog);
+    // Keep only last 10 errors
+    if (errorHistory.length > 10) {
+      errorHistory.shift();
+    }
+    localStorage.setItem('ai_error_history', JSON.stringify(errorHistory));
+  } catch (e) {
+    // Ignore localStorage errors
+  }
   
   // Parse the error for user-friendly message
   let errorMessage = "Unable to get a response from the AI.";
+  let errorType: 'network' | 'rate_limit' | 'quota' | 'auth' | 'unknown' = 'unknown';
+  let canRetry = false;
   
   if (lastError.message?.includes('503') || lastError.message?.includes('overloaded')) {
     errorMessage = "⚠️ The AI service is currently overloaded. This usually resolves quickly.\n\n**What you can do:**\n• Wait 30 seconds and try again\n• Use simpler queries\n• Consider upgrading your API tier for better reliability";
+    errorType = 'network';
+    canRetry = true;
   } else if (lastError.message?.includes('429')) {
     errorMessage = "⚠️ Rate limit exceeded. You've made too many requests.\n\n**What you can do:**\n• Wait a few minutes before trying again\n• Reduce request frequency\n• Upgrade to a paid tier for higher limits";
+    errorType = 'rate_limit';
+    canRetry = true;
   } else if (lastError.message?.includes('quota')) {
     errorMessage = "⚠️ Daily quota exceeded.\n\n**What you can do:**\n• Wait until tomorrow (resets at midnight PT)\n• Upgrade to a paid tier";
+    errorType = 'quota';
+    canRetry = false;
+  } else if (lastError.message?.includes('API key') || lastError.message?.includes('401') || lastError.message?.includes('403')) {
+    errorMessage = "⚠️ Authentication error. Please check your API key.\n\n**What you can do:**\n• Verify your VITE_GEMINI_API_KEY is set correctly\n• Check that your API key is valid and has proper permissions\n• Get a new API key from: https://makersuite.google.com/app/apikey";
+    errorType = 'auth';
+    canRetry = false;
+  } else if (lastError.message?.includes('network') || lastError.message?.includes('fetch')) {
+    errorMessage = "⚠️ Network error. Please check your internet connection.\n\n**What you can do:**\n• Check your internet connection\n• Try again in a few moments\n• If the problem persists, check your firewall settings";
+    errorType = 'network';
+    canRetry = true;
   }
 
   return { 
-    text: `${errorMessage}\n\n_Technical details: ${lastError.message}_` 
+    text: `${errorMessage}\n\n_Technical details: ${lastError.message}_`,
+    error: {
+      type: errorType,
+      message: lastError.message,
+      canRetry,
+      timestamp: new Date().toISOString(),
+    }
   };
 };

@@ -12,9 +12,11 @@ import { Toolbar } from './components/Toolbar';
 import { FormulaBar } from './components/FormulaBar';
 import { SheetTabs } from './components/SheetTabs';
 import { Logo } from './components/Logo';
-import type { ChatMessage, SpreadsheetRow, FunctionCallAction, HistoryEntry, FilterState, SortState, CellSelection, ChartData } from './types';
+import type { ChatMessage, SpreadsheetRow, FunctionCallAction, HistoryEntry, FilterState, SortState, CellSelection, ChartData, ConversationContext } from './types';
 import { SPREADSHEET_DATA } from './constants';
-import { getAIResponse } from './services/geminiService';
+import { getAIResponse, type ModelMode } from './services/geminiService';
+import { analyticsService } from './services/analyticsService';
+import { promptService } from './services/promptService';
 
 const MIN_SPREADSHEET_WIDTH = 500;
 const MIN_PANEL_WIDTH = 320;
@@ -121,25 +123,377 @@ const App: React.FC = () => {
     }
   }, [historyIndex]);
 
+  // ADD: Enhanced state management
+  const [conversationContext, setConversationContext] = useState<ConversationContext>({
+    actions: [],
+    insights: [],
+    lastQuery: ''
+  });
+
+  // ADD: AI suggestion system
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+
+  // ADD: Smart suggestions based on data
+  useEffect(() => {
+    const generateSuggestions = () => {
+      const suggestions = [];
+      
+      // Suggest based on data characteristics
+      if (sheetData.length > 100) {
+        suggestions.push("Your dataset is large. Would you like me to summarize key trends?");
+      }
+      
+      // Suggest based on column types
+      const numericCols = Object.keys(sheetData[0] || {}).filter(
+        col => typeof sheetData[0][col] === 'number'
+      );
+      if (numericCols.length > 2) {
+        suggestions.push(`I can analyze correlations between ${numericCols.join(', ')}`);
+      }
+      
+      // Suggest based on time data
+      if (sheetData[0]?.month) {
+        suggestions.push("I can show you trends over time by month");
+      }
+      
+      setAiSuggestions(suggestions);
+    };
+    
+    generateSuggestions();
+  }, [sheetData]);
+
+  // ADD: Feedback mechanism
+  const [messageFeedback, setMessageFeedback] = useState<Record<number, 'up' | 'down'>>({});
+
+  const handleMessageFeedback = (messageIndex: number, feedback: 'up' | 'down') => {
+    setMessageFeedback(prev => ({ ...prev, [messageIndex]: feedback }));
+    
+    // Send feedback to improve AI (in production, log this)
+    console.log('User feedback:', { messageIndex, feedback, message: messages[messageIndex] });
+  };
+
   // Handle Toolbar Actions
   const handleToolbarAction = (action: string, params?: any) => {
     switch (action) {
+      // File menu
+      case 'new_file':
+        setSheetData([]);
+        addToHistory('new_file', 'Created new file');
+        showNotification('New file created');
+        break;
+      case 'open_file':
+        // Create a file input element
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.csv,.json';
+        input.onchange = (e: any) => {
+          const file = e.target.files[0];
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const text = event.target?.result as string;
+              if (file.name.endsWith('.csv')) {
+                const lines = text.split('\n');
+                const headers = lines[0].split(',');
+                const newData = lines.slice(1).map(line => {
+                  const values = line.split(',');
+                  const row: any = {};
+                  headers.forEach((header, i) => {
+                    row[header.trim()] = values[i]?.trim() || '';
+                  });
+                  return row;
+                }).filter(row => Object.keys(row).length > 0);
+                setSheetData(newData as SpreadsheetRow[]);
+                showNotification('File imported successfully');
+              }
+            };
+            reader.readAsText(file);
+          }
+        };
+        input.click();
+        break;
+      case 'save_file':
+        handleExport();
+        break;
+      case 'import_csv':
+        handleToolbarAction('open_file');
+        break;
+      case 'export_csv':
+        handleExport();
+        break;
+      case 'export_pdf':
+        window.print();
+        showNotification('PDF export (using print)');
+        break;
+      case 'print':
+        window.print();
+        showNotification('Print dialog opened');
+        break;
+      case 'share':
+        showNotification('Share feature - Coming soon');
+        break;
+
+      // Edit menu
       case 'undo':
         undo();
         break;
       case 'redo':
         redo();
         break;
-      case 'print':
-        window.print();
-        showNotification('Print dialog opened');
+      case 'cut':
+        // Trigger cut via keyboard event
+        document.execCommand('cut');
+        showNotification('Cut to clipboard');
+        break;
+      case 'copy':
+        // Trigger copy via keyboard event
+        document.execCommand('copy');
+        showNotification('Copied to clipboard');
+        break;
+      case 'paste':
+        // Trigger paste via keyboard event
+        document.execCommand('paste');
+        showNotification('Pasted from clipboard');
+        break;
+      case 'paste_special':
+        showNotification('Paste special - Coming soon');
+        break;
+      case 'find':
+        document.getElementById('search-input')?.focus();
+        break;
+      case 'replace':
+        showNotification('Find & Replace - Coming soon');
+        break;
+      case 'delete_rows':
+        if (selectedCells) {
+          const rowsToDelete = new Set<number>();
+          for (let row = selectedCells.startRow; row <= (selectedCells.endRow || selectedCells.startRow); row++) {
+            rowsToDelete.add(row);
+          }
+          setSheetData(prev => prev.filter((_, idx) => !rowsToDelete.has(idx)));
+          addToHistory('delete_rows', `Deleted ${rowsToDelete.size} rows`);
+          showNotification(`Deleted ${rowsToDelete.size} rows`);
+        } else {
+          showNotification('Please select rows to delete');
+        }
+        break;
+      case 'delete_columns':
+        if (selectedCells) {
+          const colsToDelete = new Set<string>();
+          const startColIdx = Object.keys(sheetData[0] || {}).indexOf(selectedCells.startCol);
+          const endColIdx = selectedCells.endCol ? Object.keys(sheetData[0] || {}).indexOf(selectedCells.endCol) : startColIdx;
+          const allCols = Object.keys(sheetData[0] || {});
+          for (let i = Math.min(startColIdx, endColIdx); i <= Math.max(startColIdx, endColIdx); i++) {
+            if (allCols[i]) colsToDelete.add(allCols[i]);
+          }
+          setSheetData(prev => prev.map(row => {
+            const newRow = { ...row };
+            colsToDelete.forEach(col => delete newRow[col]);
+            return newRow;
+          }));
+          addToHistory('delete_columns', `Deleted ${colsToDelete.size} columns`);
+          showNotification(`Deleted ${colsToDelete.size} columns`);
+        } else {
+          showNotification('Please select columns to delete');
+        }
+        break;
+
+      // Insert menu
+      case 'insert_rows_above':
+        if (selectedCells) {
+          const insertAt = selectedCells.startRow;
+          const newRow: SpreadsheetRow = {
+            month: '',
+            product: '',
+            region: '',
+            sales: 0,
+            cost: 0,
+            profit: 0,
+          };
+          setSheetData(prev => [
+            ...prev.slice(0, insertAt),
+            newRow,
+            ...prev.slice(insertAt)
+          ]);
+          addToHistory('insert_row', 'Inserted row above');
+          showNotification('Row inserted above');
+        }
+        break;
+      case 'insert_rows_below':
+        if (selectedCells) {
+          const insertAt = (selectedCells.endRow || selectedCells.startRow) + 1;
+          const newRow: SpreadsheetRow = {
+            month: '',
+            product: '',
+            region: '',
+            sales: 0,
+            cost: 0,
+            profit: 0,
+          };
+          setSheetData(prev => [
+            ...prev.slice(0, insertAt),
+            newRow,
+            ...prev.slice(insertAt)
+          ]);
+          addToHistory('insert_row', 'Inserted row below');
+          showNotification('Row inserted below');
+        }
+        break;
+      case 'insert_cols_left':
+        showNotification('Insert column left - Coming soon');
+        break;
+      case 'insert_cols_right':
+        showNotification('Insert column right - Coming soon');
+        break;
+      case 'insert_comment':
+        showNotification('Insert comment - Coming soon');
+        break;
+      case 'insert_checkbox':
+        showNotification('Insert checkbox - Coming soon');
+        break;
+      case 'insert_dropdown':
+        showNotification('Insert dropdown - Coming soon');
+        break;
+      case 'insert_chart':
+        showNotification('Insert chart - Use AI assistant to generate charts');
+        break;
+      case 'insert_image':
+        showNotification('Insert image - Coming soon');
+        break;
+      case 'insert_link':
+        showNotification('Insert link - Coming soon');
+        break;
+
+      // Format menu
+      case 'format_number':
+        showNotification('Number format - Coming soon');
+        break;
+      case 'clear_format':
+        showNotification('Clear formatting - Coming soon');
         break;
       case 'bold':
       case 'italic':
       case 'underline':
         showNotification(`Applied ${action}`);
         break;
+      case 'text_color':
+        showNotification('Text color changed');
+        break;
+      case 'fill_color':
+        showNotification('Fill color changed');
+        break;
+      case 'borders':
+        showNotification('Borders - Coming soon');
+        break;
+      case 'merge_cells':
+        showNotification('Merge cells - Coming soon');
+        break;
+      case 'conditional_format':
+        showNotification('Conditional formatting - Coming soon');
+        break;
+      case 'format_currency':
+        showNotification('Format as currency');
+        break;
+      case 'format_percent':
+        showNotification('Format as percent');
+        break;
+      case 'decrease_decimal':
+        showNotification('Decreased decimal places');
+        break;
+      case 'increase_decimal':
+        showNotification('Increased decimal places');
+        break;
+
+      // Data menu
+      case 'sort_range':
+        showNotification('Sort range - Use AI assistant or click column header');
+        break;
+      case 'filter':
+        showNotification('Filter - Use AI assistant');
+        break;
+      case 'create_filter':
+        showNotification('Create filter - Use AI assistant');
+        break;
+      case 'data_validation':
+        showNotification('Data validation - Coming soon');
+        break;
+      case 'pivot_table':
+        showNotification('Pivot table - Use AI assistant');
+        break;
+      case 'data_studio':
+        showNotification('Data studio - Coming soon');
+        break;
+
+      // Tools menu
+      case 'spelling':
+        showNotification('Spell check - Coming soon');
+        break;
+      case 'notifications':
+        showNotification('Notification rules - Coming soon');
+        break;
+      case 'protection':
+        showNotification('Protection - Coming soon');
+        break;
+      case 'version_history':
+        setShowHistory(true);
+        break;
+      case 'script_editor':
+        showNotification('Script editor - Coming soon');
+        break;
+      case 'settings':
+        showNotification('Settings - Coming soon');
+        break;
+
+      // Help menu
+      case 'help_shortcuts':
+        showNotification('Keyboard shortcuts: Arrow keys to navigate, Shift+Arrow to select, Ctrl+C/V/X for copy/paste/cut, F2 to edit, Delete to clear');
+        break;
+      case 'about':
+        showNotification('VectorSheet - AI-Powered Spreadsheet Application');
+        break;
+      case 'support':
+        showNotification('Support - Coming soon');
+        break;
+      case 'feedback':
+        showNotification('Send feedback - Coming soon');
+        break;
+
+      // Formatting toolbar actions
+      case 'format_text':
+        showNotification(`Format: ${params?.format} ${params?.enabled ? 'enabled' : 'disabled'}`);
+        break;
+      case 'color_change':
+        showNotification(`${params?.type} color changed`);
+        break;
+      case 'alignment':
+        showNotification(`Alignment: ${params?.align}`);
+        break;
+      case 'zoom':
+        showNotification(`Zoom: ${params?.zoom}%`);
+        break;
+      case 'font_change':
+        showNotification(`Font changed to ${params?.font}`);
+        break;
+      case 'font_size_change':
+        showNotification(`Font size changed to ${params?.size}`);
+        break;
+      case 'border_all':
+      case 'border_outline':
+      case 'border_none':
+        showNotification(`Border: ${action.replace('border_', '')}`);
+        break;
+      case 'filter_data':
+        showNotification('Filter data - Use AI assistant');
+        break;
+      case 'functions':
+        showNotification('Functions - Use AI assistant for formulas');
+        break;
+      case 'more':
+        showNotification('More options - Coming soon');
+        break;
+
       default:
+        console.log('Unhandled action:', action, params);
         break;
     }
   };
@@ -451,7 +805,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleSendMessage = async (userInput: string) => {
+  const handleSendMessage = async (userInput: string, modelMode: ModelMode = 'auto') => {
     if (!userInput.trim()) return;
 
     setChartData(null);
@@ -473,15 +827,49 @@ const App: React.FC = () => {
     setMessages(newMessages);
     setIsLoading(true);
 
+    // Track prompt
+    const startTime = Date.now();
+    analyticsService.trackAction('prompt_sent', { modelMode, promptLength: userInput.length });
+
     try {
-      const aiResponse = await getAIResponse(userInput, sheetData);
+      const aiResponse = await getAIResponse(
+        userInput, 
+        sheetData,
+        conversationContext,
+        (attempt, delay) => {
+          showNotification(`AI is overloaded. Retrying attempt ${attempt} in ${Math.round(delay / 1000)}s...`, 'info');
+        },
+        modelMode
+      );
+      
+      const responseTime = Date.now() - startTime;
       const updatedMessages: ChatMessage[] = [...newMessages, { role: 'assistant' as const, content: aiResponse.text }];
       setMessages(updatedMessages);
+      
+      // Track successful prompt
+      analyticsService.trackPrompt(userInput, modelMode, true, responseTime);
+      
+      // Track error if present
+      if (aiResponse.error) {
+        analyticsService.trackError(aiResponse.error.type, aiResponse.error.message, aiResponse.error.canRetry);
+      }
+      
       if (aiResponse.action) {
         handleSheetAction(aiResponse.action);
+        setConversationContext(prev => ({
+          ...prev,
+          actions: [...prev.actions, aiResponse.action as FunctionCallAction],
+          lastQuery: userInput,
+        }));
       }
-    } catch (error) {
+    } catch (error: any) {
+      const responseTime = Date.now() - startTime;
       console.error("Error getting AI response:", error);
+      
+      // Track failed prompt
+      analyticsService.trackPrompt(userInput, modelMode, false, responseTime);
+      analyticsService.trackError('unknown', error.message || 'Unknown error', false);
+      
       showNotification('Failed to get AI response', 'error');
       setMessages([...newMessages, { role: 'assistant' as const, content: "Sorry, I encountered an error." }]);
     } finally {
@@ -517,6 +905,9 @@ const App: React.FC = () => {
     a.download = `VectorSheet-${activeSheet}-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    
+    // Track export
+    analyticsService.trackExport('csv');
     
     addToHistory('export', 'Exported data as CSV');
     showNotification('Data exported successfully');
@@ -564,22 +955,98 @@ const App: React.FC = () => {
     setChartData(null);
   };
 
+  // AI Action Handlers for Context Menu
+  const getSelectedData = () => {
+    if (!selectedCells || sheetData.length === 0) return null;
+    
+    const columns = Object.keys(sheetData[0]);
+    const startRow = selectedCells.startRow;
+    const endRow = selectedCells.endRow !== undefined ? selectedCells.endRow : selectedCells.startRow;
+    const startColIdx = columns.indexOf(selectedCells.startCol);
+    const endColIdx = selectedCells.endCol ? columns.indexOf(selectedCells.endCol) : startColIdx;
+    
+    const minRow = Math.min(startRow, endRow);
+    const maxRow = Math.max(startRow, endRow);
+    const minColIdx = Math.min(startColIdx, endColIdx);
+    const maxColIdx = Math.max(startColIdx, endColIdx);
+    
+    const selectedData = sheetData.slice(minRow, maxRow + 1).map(row => {
+      const selectedRow: any = {};
+      columns.slice(minColIdx, maxColIdx + 1).forEach(col => {
+        selectedRow[col] = row[col];
+      });
+      return selectedRow;
+    });
+    
+    return { data: selectedData, range: `${selectedCells.startCol}${minRow + 1}:${selectedCells.endCol || selectedCells.startCol}${maxRow + 1}` };
+  };
+
+  const handleExplainSelection = () => {
+    const selection = getSelectedData();
+    if (!selection) {
+      showNotification('Please select cells first', 'error');
+      return;
+    }
+    
+    const dataSummary = selection.data.map((row, idx) => 
+      Object.entries(row).map(([key, val]) => `${key}: ${val}`).join(', ')
+    ).join('\n');
+    
+    const prompt = `Explain this selected data:\n\n${dataSummary}\n\nProvide insights about what this data represents, any patterns you notice, and what it might indicate.`;
+    handleSendMessage(prompt);
+    setContextMenu(null);
+  };
+
+  const handleGenerateFormula = () => {
+    const selection = getSelectedData();
+    if (!selection) {
+      showNotification('Please select cells first', 'error');
+      return;
+    }
+    
+    const columns = Object.keys(selection.data[0] || {});
+    const numericCols = columns.filter(col => {
+      const sample = selection.data[0]?.[col];
+      return typeof sample === 'number';
+    });
+    
+    const prompt = `Generate an Excel/Google Sheets formula for the selected range ${selection.range}. The data has these columns: ${columns.join(', ')}. Numeric columns: ${numericCols.join(', ')}. Suggest a useful formula that would work with this data.`;
+    handleSendMessage(prompt);
+    setContextMenu(null);
+  };
+
+  const handleSummarizeSelection = () => {
+    const selection = getSelectedData();
+    if (!selection) {
+      showNotification('Please select cells first', 'error');
+      return;
+    }
+    
+    const dataSummary = selection.data.map((row, idx) => 
+      Object.entries(row).map(([key, val]) => `${key}: ${val}`).join(', ')
+    ).join('\n');
+    
+    const prompt = `Summarize this selected data:\n\n${dataSummary}\n\nProvide a concise summary including key statistics, totals, averages, and any notable observations.`;
+    handleSendMessage(prompt);
+    setContextMenu(null);
+  };
+
   return (
     <div className={isDarkMode ? 'dark' : ''} style={{ fontFamily: 'var(--font-family)' }}>
       <main 
         ref={mainContainerRef} 
-        className="bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 h-screen w-full flex flex-col overflow-hidden"
+        className="bg-[#0D0D0D] text-[#E5E5E5] h-screen w-full flex flex-col overflow-hidden"
         onContextMenu={(e) => {
           e.preventDefault();
           setContextMenu({ x: e.clientX, y: e.clientY });
         }}
       >
         {/* Top Bar */}
-        <div className="flex-shrink-0 h-12 border-b border-gray-200 dark:border-[#2d2d2d] bg-white dark:bg-[#252526] flex items-center px-4 justify-between">
+        <div className="flex-shrink-0 h-12 border-b border-[#2D2D2D] bg-[#252526] flex items-center px-4 justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowSidebar(prev => !prev)}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors"
+              className="p-2 hover:bg-[#2A2A2A] rounded transition-colors text-[#9CA3AF] hover:text-white"
               title="Toggle Sidebar (⌘B)"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -593,25 +1060,25 @@ const App: React.FC = () => {
               <div>
                 <h1 
                   style={{ fontFamily: "'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
-                  className="text-sm font-bold text-gray-900 dark:text-white tracking-tight leading-tight"
+                  className="text-sm font-bold text-white tracking-tight leading-tight"
                 >
                   VectorSheet
                 </h1>
-                <p className="text-[10px] text-gray-500 dark:text-gray-400 -mt-0.5 font-medium">
+                <p className="text-[10px] text-[#9CA3AF] -mt-0.5 font-medium">
                   AI Spreadsheet
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-px ml-4 bg-gray-100 dark:bg-[#2d2d2d] rounded">
+            <div className="flex items-center gap-px ml-4 bg-[#1E1E1E] border border-[#2D2D2D] rounded-md">
               {(['sheet', 'split', 'chat'] as const).map((view) => (
                 <button
                   key={view}
                   onClick={() => setActiveView(view)}
                   className={`px-3 py-1 text-xs font-medium transition-colors ${
                     activeView === view
-                      ? 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white'
-                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                      ? 'bg-[#0D0D0D] text-white'
+                      : 'text-[#9CA3AF] hover:text-white hover:bg-[#2A2A2A]'
                   }`}
                 >
                   {view.charAt(0).toUpperCase() + view.slice(1)}
@@ -632,12 +1099,12 @@ const App: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search... (⌘F)"
-                className="w-64 px-3 py-1 text-xs bg-gray-100 dark:bg-[#2d2d2d] border border-gray-200 dark:border-[#3d3d3d] rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                className="w-64 px-3 py-1.5 text-xs bg-[#1E1E1E] border border-[#2D2D2D] rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none placeholder:text-[#6B7280] text-[#E5E5E5] transition-colors"
               />
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#6B7280] hover:text-white transition-colors"
                 >
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -652,7 +1119,7 @@ const App: React.FC = () => {
             <button
               onClick={undo}
               disabled={historyIndex >= history.length - 1}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors disabled:opacity-30"
+              className="p-2 hover:bg-[#2A2A2A] rounded transition-colors disabled:opacity-30 text-[#9CA3AF] hover:text-white"
               title="Undo (⌘Z)"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -662,7 +1129,7 @@ const App: React.FC = () => {
             <button
               onClick={redo}
               disabled={historyIndex <= 0}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors disabled:opacity-30"
+              className="p-2 hover:bg-[#2A2A2A] rounded transition-colors disabled:opacity-30 text-[#9CA3AF] hover:text-white"
               title="Redo (⌘⇧Z)"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -670,12 +1137,12 @@ const App: React.FC = () => {
               </svg>
             </button>
 
-            <div className="w-px h-4 bg-gray-300 dark:bg-gray-600"></div>
+            <div className="w-px h-4 bg-[#2D2D2D]"></div>
 
             {/* History */}
             <button
               onClick={() => setShowHistory(prev => !prev)}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors"
+              className="p-2 hover:bg-[#2A2A2A] rounded transition-colors text-[#9CA3AF] hover:text-white"
               title="History"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -686,7 +1153,7 @@ const App: React.FC = () => {
             {/* Export */}
             <button
               onClick={handleExport}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors"
+              className="p-2 hover:bg-[#2A2A2A] rounded transition-colors text-[#9CA3AF] hover:text-white"
               title="Export CSV"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -694,13 +1161,13 @@ const App: React.FC = () => {
               </svg>
             </button>
 
-            <div className="w-px h-4 bg-gray-300 dark:bg-gray-600"></div>
+            <div className="w-px h-4 bg-[#2D2D2D]"></div>
 
             {/* Font Selector */}
             <div className="relative">
               <button
                 onClick={() => setShowFontSelector(prev => !prev)}
-                className="px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors flex items-center gap-2"
+                className="px-3 py-1.5 text-xs hover:bg-[#2A2A2A] rounded transition-colors flex items-center gap-2 text-[#9CA3AF] hover:text-white"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
@@ -718,12 +1185,12 @@ const App: React.FC = () => {
 
             <button
               onClick={() => setShowCommandPalette(true)}
-              className="px-3 py-1.5 text-xs bg-gray-100 dark:bg-[#2d2d2d] hover:bg-gray-200 dark:hover:bg-[#3d3d3d] rounded transition-colors flex items-center gap-2"
+              className="px-3 py-1.5 text-xs bg-[#1E1E1E] hover:bg-[#2A2A2A] border border-[#2D2D2D] rounded transition-colors flex items-center gap-2 text-[#9CA3AF] hover:text-white"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
-              <span className="text-gray-600 dark:text-gray-400">⌘K</span>
+              <span>⌘K</span>
             </button>
 
             <button
@@ -732,7 +1199,7 @@ const App: React.FC = () => {
                 setIsDarkMode(newMode);
                 localStorage.setItem('darkMode', String(newMode));
               }}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-[#2d2d2d] rounded transition-colors"
+              className="p-2 hover:bg-[#2A2A2A] rounded transition-colors text-[#9CA3AF] hover:text-white"
               title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {isDarkMode ? (
@@ -812,6 +1279,42 @@ const App: React.FC = () => {
                     isDarkMode={isDarkMode}
                     chartData={chartData}
                     onClearChart={handleClearChart}
+                    onNewChat={() => {
+                      setMessages([{
+                        role: 'assistant',
+                        content: "Hello! I'm your AI data analyst. I can help you analyze this sales data. Try asking me to 'show total sales by region' or 'sort by profit in descending order'.",
+                      }]);
+                      setChartData(null);
+                      showNotification('New chat started');
+                    }}
+                    onShowHistory={() => {
+                      setShowHistory(true);
+                    }}
+                    sheetData={sheetData}
+                    collaborators={[]}
+                    onUndo={undo}
+                    onRedo={redo}
+                    canUndo={historyIndex < history.length - 1}
+                    canRedo={historyIndex > 0}
+                    onFeedback={(messageId, feedback) => {
+                      setMessages(prev => prev.map(msg => {
+                        const id = msg.id || `msg-${prev.indexOf(msg)}`;
+                        if (id === messageId) {
+                          return { ...msg, feedback };
+                        }
+                        return msg;
+                      }));
+                    }}
+                    onRegenerate={(messageId) => {
+                      const messageIndex = messages.findIndex(msg => {
+                        const id = msg.id || `msg-${messages.indexOf(msg)}`;
+                        return id === messageId;
+                      });
+                      if (messageIndex > 0 && messages[messageIndex - 1]?.role === 'user') {
+                        const userMessage = messages[messageIndex - 1].content;
+                        handleSendMessage(userMessage);
+                      }
+                    }}
                   />
                 </div>
               )}
@@ -830,7 +1333,20 @@ const App: React.FC = () => {
         {/* Status Bar */}
         <StatusBar 
           rowCount={sheetData.length}
-          selectedCount={selectedCells ? 1 : 0}
+          selectedCount={selectedCells ? (() => {
+            if (selectedCells.endRow !== undefined && selectedCells.endCol) {
+              // Range selection
+              const startRow = Math.min(selectedCells.startRow, selectedCells.endRow);
+              const endRow = Math.max(selectedCells.startRow, selectedCells.endRow);
+              const columns = Object.keys(sheetData[0] || {});
+              const startColIdx = columns.indexOf(selectedCells.startCol);
+              const endColIdx = columns.indexOf(selectedCells.endCol);
+              const minColIdx = Math.min(startColIdx, endColIdx);
+              const maxColIdx = Math.max(startColIdx, endColIdx);
+              return (endRow - startRow + 1) * (maxColIdx - minColIdx + 1);
+            }
+            return 1; // Single cell
+          })() : 0}
           filterActive={filterState.column !== null}
           sortActive={sortState.column !== null}
         />
@@ -852,6 +1368,10 @@ const App: React.FC = () => {
               showNotification('Deleted');
               setContextMenu(null);
             }}
+            onExplain={handleExplainSelection}
+            onGenerateFormula={handleGenerateFormula}
+            onSummarize={handleSummarizeSelection}
+            hasSelection={!!selectedCells}
           />
         )}
 

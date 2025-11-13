@@ -31,13 +31,20 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
   const [editingCell, setEditingCell] = useState<CellCoord | null>(null);
   const [editValue, setEditValue] = useState('');
   const [multiSelectStart, setMultiSelectStart] = useState<CellCoord | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
   const [multiSelectEnd, setMultiSelectEnd] = useState<CellCoord | null>(null);
   const [selectedRange, setSelectedRange] = useState<Set<string>>(new Set());
   const [copiedCells, setCopiedCells] = useState<SpreadsheetRow[] | null>(null);
   const [clipboard, setClipboard] = useState<string>('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; cell: CellCoord } | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const [rowHeights, setRowHeights] = useState<Record<number, number>>({});
+  const [resizingColumn, setResizingColumn] = useState<{ col: string, startX: number, startWidth: number } | null>(null);
+  const [resizingRow, setResizingRow] = useState<{ row: number, startY: number, startHeight: number } | null>(null);
   const [frozenColumns, setFrozenColumns] = useState<number>(1);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<CellCoord | null>(null);
+  const [dragEnd, setDragEnd] = useState<CellCoord | null>(null);
 
   const tableRef = useRef<HTMLTableElement>(null);
   const cellRefs = useRef<Record<string, HTMLDivElement>>({});
@@ -70,7 +77,7 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     const parts = text.split(new RegExp(`(${query})`, 'gi'));
     return parts.map((part, i) =>
       part.toLowerCase() === query.toLowerCase()
-        ? <span key={i} className="bg-yellow-300 dark:bg-yellow-600 font-bold px-1">{part}</span>
+        ? <span key={i} className="bg-yellow-600 font-bold px-1 text-black">{part}</span>
         : part
     );
   }, []);
@@ -92,17 +99,22 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
         }
         return newSet;
       });
+      setMultiSelectStart({ row, col });
     } else if (e.shiftKey && multiSelectStart) {
       // Range select with Shift
       setMultiSelectEnd({ row, col });
       updateRangeSelection({ row, col });
     } else {
-      // Single select
+      // Start drag selection
+      setIsDragging(true);
+      setDragStart({ row, col });
+      setDragEnd({ row, col });
       setMultiSelectStart({ row, col });
       setMultiSelectEnd(null);
       setSelectedRange(new Set([cellKey(row, col)]));
+      setIsSelecting(true);
     }
-  }, [multiSelectStart]);
+  }, [multiSelectStart, cellKey]);
 
   const updateRangeSelection = useCallback((endCoord: CellCoord) => {
     if (!multiSelectStart) return;
@@ -122,7 +134,14 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     }
 
     setSelectedRange(newSet);
-  }, [multiSelectStart, columns]);
+    setMultiSelectEnd(endCoord);
+    onSelectCells({
+      startRow: multiSelectStart.row,
+      startCol: multiSelectStart.col,
+      endRow: endCoord.row,
+      endCol: endCoord.col,
+    });
+  }, [multiSelectStart, columns, cellKey, onSelectCells]);
 
   // ========== Cell Editing ==========
   
@@ -135,9 +154,14 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     } else if (e.detail === 1) {
       // Single click - just select the cell
       setMultiSelectStart({ row, col });
+      setMultiSelectEnd(null);
       setSelectedRange(new Set([cellKey(row, col)]));
+      onSelectCells({
+        startRow: row,
+        startCol: col,
+      });
     }
-  }, [data, cellKey]);
+  }, [data, cellKey, onSelectCells]);
 
   const handleCellChange = useCallback((e: React.FocusEvent<HTMLDivElement>, row: number, col: keyof SpreadsheetRow) => {
     const newValue = e.currentTarget.textContent || '';
@@ -285,12 +309,65 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     console.log('✅ Selected all', allCells.size, 'cells');
   }, [data, columns, cellKey]);
 
+  // ========== Keyboard Navigation ==========
+  const navigateCell = useCallback((direction: 'up' | 'down' | 'left' | 'right', extendSelection: boolean = false) => {
+    if (!multiSelectStart) {
+      // If no selection, start at first cell
+      const startCoord = { row: 0, col: columns[0] };
+      setMultiSelectStart(startCoord);
+      setSelectedRange(new Set([cellKey(0, columns[0])]));
+      return;
+    }
+
+    let newRow = multiSelectStart.row;
+    let newCol = multiSelectStart.col;
+    const currentColIdx = columns.indexOf(multiSelectStart.col);
+
+    switch (direction) {
+      case 'up':
+        newRow = Math.max(0, newRow - 1);
+        break;
+      case 'down':
+        newRow = Math.min(data.length - 1, newRow + 1);
+        break;
+      case 'left':
+        if (currentColIdx > 0) {
+          newCol = columns[currentColIdx - 1];
+        }
+        break;
+      case 'right':
+        if (currentColIdx < columns.length - 1) {
+          newCol = columns[currentColIdx + 1];
+        }
+        break;
+    }
+
+    if (extendSelection && multiSelectStart) {
+      updateRangeSelection({ row: newRow, col: newCol });
+    } else {
+      setMultiSelectStart({ row: newRow, col: newCol });
+      setSelectedRange(new Set([cellKey(newRow, newCol)]));
+      onSelectCells({
+        startRow: newRow,
+        startCol: newCol,
+      });
+    }
+  }, [multiSelectStart, columns, data.length, cellKey, updateRangeSelection, onSelectCells]);
+
   // ========== Keyboard Shortcuts ==========  
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't interfere if user is editing a cell or typing in an input/textarea
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      // Arrow key navigation
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        const direction = e.key.replace('Arrow', '').toLowerCase() as 'up' | 'down' | 'left' | 'right';
+        navigateCell(direction, e.shiftKey);
         return;
       }
 
@@ -339,19 +416,108 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedRange, multiSelectStart, data, columns, handleCopy, handlePaste, handleCut, handleDelete, selectAll]);
+  }, [selectedRange, multiSelectStart, data, columns, handleCopy, handlePaste, handleCut, handleDelete, selectAll, navigateCell]);
 
-  // ========== Context Menu ==========
+  // ========== Drag Selection ==========
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDragging && dragStart && tableRef.current) {
+        // Use cell refs to find which cell the mouse is over
+        let currentRow = dragStart.row;
+        let currentCol = dragStart.col;
+        
+        // Try to find the cell element under the mouse
+        const elements = document.elementsFromPoint(e.clientX, e.clientY);
+        for (const el of elements) {
+          const td = el.closest('td');
+          if (td && td.dataset.row !== undefined && td.dataset.col) {
+            currentRow = parseInt(td.dataset.row);
+            currentCol = td.dataset.col;
+            break;
+          }
+        }
+        
+        // Clamp to valid ranges
+        currentRow = Math.max(0, Math.min(data.length - 1, currentRow));
+        const colIdx = columns.indexOf(currentCol);
+        if (colIdx === -1) {
+          currentCol = dragStart.col;
+        }
+        
+        setDragEnd({ row: currentRow, col: currentCol });
+        updateRangeSelection({ row: currentRow, col: currentCol });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      setIsSelecting(false);
+      setDragStart(null);
+      setDragEnd(null);
+    };
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragStart, data.length, columns, updateRangeSelection]);
+
+  // ========== Column & Row Resize Operations ==========
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (resizingColumn) {
+        const diffX = e.clientX - resizingColumn.startX;
+        const newWidth = Math.max(80, resizingColumn.startWidth + diffX); // Minimum width 80px
+        setColumnWidths(prev => ({ ...prev, [resizingColumn.col]: newWidth }));
+      }
+      if (resizingRow) {
+        const diffY = e.clientY - resizingRow.startY;
+        const newHeight = Math.max(20, resizingRow.startHeight + diffY); // Minimum height 20px
+        setRowHeights(prev => ({ ...prev, [resizingRow.row]: newHeight }));
+      }
+    };
+
+    const handleMouseUp = () => {
+      setResizingColumn(null);
+      setResizingRow(null);
+    };
+
+    if (resizingColumn || resizingRow) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingColumn, resizingRow]);
   
-  const handleContextMenu = (e: React.MouseEvent, row: number, col: string) => {
+  const handleColumnResizeStart = (col: string, e: React.MouseEvent) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, cell: { row, col } });
+    e.stopPropagation();
+    const th = (e.target as HTMLElement).closest('th');
+    setResizingColumn({
+      col,
+      startX: e.clientX,
+      startWidth: th?.offsetWidth || 120,
+    });
   };
 
-  // ========== Column Operations ==========
-  
-  const handleColumnResize = (col: string, newWidth: number) => {
-    setColumnWidths(prev => ({ ...prev, [col]: newWidth }));
+  const handleRowResizeStart = (row: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const tr = (e.target as HTMLElement).closest('tr');
+    setResizingRow({
+      row,
+      startY: e.clientY,
+      startHeight: tr?.offsetHeight || 40,
+    });
   };
 
   // ========== Render Functions ==========
@@ -361,17 +527,30 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
     const isSelected = selectedRange.has(cellId);
     const isEditing = editingCell?.row === row && editingCell?.col === col;
     const value = data[row][col];
+    const isStartCell = multiSelectStart?.row === row && multiSelectStart?.col === col;
+    const isEndCell = multiSelectEnd?.row === row && multiSelectEnd?.col === col;
 
     return (
       <td
         key={cellId}
-        className={`px-4 py-2 border-r border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 min-w-[120px] max-w-[300px] relative cursor-cell transition-colors ${
+        data-row={row}
+        data-col={col}
+        className={`px-4 py-2 border-r border-b border-[#2D2D2D] text-[#E5E5E5] min-w-[120px] max-w-[300px] relative cursor-cell transition-colors ${
           isSelected 
-            ? 'bg-blue-200 dark:bg-blue-900 border-blue-400' 
-            : 'hover:bg-gray-100 dark:hover:bg-[#2d2d2d]'
-        }`}
+            ? 'bg-blue-900/30 border-blue-500 border-2' 
+            : 'hover:bg-[#1A1A1A]'
+        } ${isStartCell ? 'ring-2 ring-blue-400' : ''}`}
+        style={{ 
+          width: columnWidths[col] ? `${columnWidths[col]}px` : 'auto',
+          height: rowHeights[row] ? `${rowHeights[row]}px` : 'auto',
+        }}
         onMouseDown={(e) => handleCellMouseDown(row, col, e)}
-        onContextMenu={(e) => handleContextMenu(e, row, col)}
+        onMouseEnter={() => {
+          if (isDragging && dragStart) {
+            setDragEnd({ row, col });
+            updateRangeSelection({ row, col });
+          }
+        }}
       >
         {isEditing ? (
           <input
@@ -380,7 +559,14 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
             value={editValue}
             onChange={handleEditInputChange}
             onKeyDown={handleEditKeyDown}
-            className="w-full px-2 py-1 bg-white dark:bg-[#1e1e1e] border border-blue-500 rounded outline-none text-gray-900 dark:text-white"
+            onBlur={() => {
+              if (editingCell) {
+                const col = editingCell.col as keyof SpreadsheetRow;
+                onUpdateData(editingCell.row, col, editValue);
+                setEditingCell(null);
+              }
+            }}
+            className="w-full px-2 py-1 bg-[#1E1E1E] border border-blue-500 rounded outline-none text-white"
           />
         ) : (
           <div
@@ -399,29 +585,29 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
   // ========== Main Render ==========
   
   return (
-    <div className={`h-full flex flex-col ${isDarkMode ? 'dark' : ''}`}>
+    <div className="h-full flex flex-col bg-[#0D0D0D]">
       {/* Statistics Bar */}
-      <div className="flex-shrink-0 border-b border-gray-200 dark:border-[#2d2d2d] bg-gray-50 dark:bg-[#2d2d2d] px-4 py-3">
+      <div className="flex-shrink-0 border-b border-[#2D2D2D] bg-[#252526] px-4 py-3">
         <div className="grid grid-cols-5 gap-4 text-xs">
           <div>
-            <span className="text-gray-600 dark:text-gray-400">📊 Rows:</span>
-            <span className="ml-2 font-semibold text-gray-900 dark:text-white">{statistics.totalRows}</span>
+            <span className="text-[#9CA3AF]">📊 Rows:</span>
+            <span className="ml-2 font-semibold text-white">{statistics.totalRows}</span>
           </div>
           <div>
-            <span className="text-gray-600 dark:text-gray-400">💰 Sales:</span>
-            <span className="ml-2 font-semibold text-gray-900 dark:text-white">${statistics.totalSales.toLocaleString()}</span>
+            <span className="text-[#9CA3AF]">💰 Sales:</span>
+            <span className="ml-2 font-semibold text-white">${statistics.totalSales.toLocaleString()}</span>
           </div>
           <div>
-            <span className="text-gray-600 dark:text-gray-400">💸 Cost:</span>
-            <span className="ml-2 font-semibold text-gray-900 dark:text-white">${statistics.totalCost.toLocaleString()}</span>
+            <span className="text-[#9CA3AF]">💸 Cost:</span>
+            <span className="ml-2 font-semibold text-white">${statistics.totalCost.toLocaleString()}</span>
           </div>
           <div>
-            <span className="text-gray-600 dark:text-gray-400">📈 Profit:</span>
-            <span className="ml-2 font-semibold text-gray-900 dark:text-white">${statistics.totalProfit.toLocaleString()}</span>
+            <span className="text-[#9CA3AF]">📈 Profit:</span>
+            <span className="ml-2 font-semibold text-white">${statistics.totalProfit.toLocaleString()}</span>
           </div>
           <div>
-            <span className="text-gray-600 dark:text-gray-400">🎯 Selected:</span>
-            <span className="ml-2 font-semibold text-blue-600 dark:text-blue-400">{selectedRange.size}</span>
+            <span className="text-[#9CA3AF]">🎯 Selected:</span>
+            <span className="ml-2 font-semibold text-blue-500">{selectedRange.size}</span>
           </div>
         </div>
       </div>
@@ -430,27 +616,32 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
       <div className="flex-1 overflow-auto scrollbar-custom">
         <table
           ref={tableRef}
-          className="w-full border-collapse text-sm bg-white dark:bg-[#1e1e1e]"
+          className="w-full border-collapse text-sm bg-[#0D0D0D]"
         >
           {/* Header */}
-          <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-[#2d2d2d] border-b-2 border-gray-300 dark:border-gray-700">
+          <thead className="sticky top-0 z-10 bg-[#252526] border-b-2 border-[#2D2D2D]">
             <tr>
-              <th className="w-12 px-2 py-2 text-center text-xs font-semibold text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-[#2d2d2d] sticky left-0 z-20">
+              <th className="w-12 px-2 py-2 text-center text-xs font-semibold text-[#9CA3AF] bg-[#252526] sticky left-0 z-20 border-r border-[#2D2D2D]">
                 #
               </th>
               {columns.map(col => (
                 <th
                   key={col}
-                  className="px-4 py-2 text-left font-semibold text-gray-900 dark:text-white border-r border-gray-200 dark:border-gray-700 min-w-[120px] bg-gray-100 dark:bg-[#2d2d2d] sticky top-0 z-10 group"
+                  className="px-4 py-2 text-left font-semibold text-white border-r border-[#2D2D2D] min-w-[120px] bg-[#252526] sticky top-0 z-10 group relative"
+                  style={{ width: columnWidths[col] ? `${columnWidths[col]}px` : 'auto' }}
                 >
                   <div className="flex items-center justify-between">
                     <span>{col}</span>
                     {sortState.column === col && (
-                      <span className="ml-2 text-blue-600 dark:text-blue-400">
+                      <span className="ml-2 text-blue-500">
                         {sortState.order === 'asc' ? '↑' : '↓'}
                       </span>
                     )}
                   </div>
+                  <div
+                    className="absolute top-0 right-0 h-full w-2 cursor-col-resize group-hover:bg-blue-500/50"
+                    onMouseDown={(e) => handleColumnResizeStart(col, e)}
+                  />
                 </th>
               ))}
             </tr>
@@ -460,7 +651,7 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
           <tbody>
             {data.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-[#9CA3AF]">
                   📭 No data available
                 </td>
               </tr>
@@ -468,11 +659,18 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
               data.map((row, rowIndex) => (
                 <tr
                   key={rowIndex}
-                  className="border-b border-gray-200 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-[#2d2d2d]/50 transition-colors"
+                  className="border-b border-[#2D2D2D] hover:bg-[#1A1A1A] transition-colors"
                 >
-                  {/* Row Number */}
-                  <td className="w-12 px-2 py-2 text-center text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-[#1e1e1e] border-r border-gray-200 dark:border-gray-700 sticky left-0 z-5">
+                  {/* Row Number with Resizer */}
+                  <td 
+                    className="w-12 px-2 py-2 text-center text-xs font-semibold text-[#9CA3AF] bg-[#0D0D0D] border-r border-[#2D2D2D] sticky left-0 z-5 relative group"
+                    style={{ height: rowHeights[rowIndex] ? `${rowHeights[rowIndex]}px` : 'auto' }}
+                  >
                     {rowIndex + 1}
+                    <div
+                      className="absolute bottom-0 left-0 right-0 h-1 cursor-row-resize group-hover:bg-blue-500/50 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onMouseDown={(e) => handleRowResizeStart(rowIndex, e)}
+                    />
                   </td>
 
                   {/* Cells */}
@@ -486,7 +684,7 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
 
       {/* Footer Info */}
       {data.length > 0 && (
-        <div className="flex-shrink-0 border-t border-gray-200 dark:border-[#2d2d2d] bg-gray-50 dark:bg-[#2d2d2d] px-4 py-2 text-xs text-gray-600 dark:text-gray-400 flex items-center justify-between">
+        <div className="flex-shrink-0 border-t border-[#2D2D2D] bg-[#252526] px-4 py-2 text-xs text-[#9CA3AF] flex items-center justify-between">
           <div>
             📊 Showing {data.length} row{data.length !== 1 ? 's' : ''} • 📋 {selectedRange.size} cell{selectedRange.size !== 1 ? 's' : ''} selected
           </div>
@@ -499,32 +697,32 @@ const SpreadsheetViewComponent: React.FC<SpreadsheetViewProps> = ({
       {/* Context Menu */}
       {contextMenu && (
         <div
-          className="fixed bg-white dark:bg-[#2d2d2d] border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 py-1"
+          className="fixed bg-[#2A2A2A] border border-[#3B3B3B] rounded-lg shadow-lg z-50 py-1"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onMouseLeave={() => setContextMenu(null)}
         >
           <button
             onClick={() => { handleCopy(); setContextMenu(null); }}
-            className="w-full px-4 py-2 text-left text-xs hover:bg-gray-100 dark:hover:bg-[#3d3d3d] text-gray-700 dark:text-gray-300"
+            className="w-full px-4 py-2 text-left text-xs hover:bg-[#333333] text-[#E5E5E5]"
           >
             📋 Copy
           </button>
           <button
             onClick={() => { handleCut(); setContextMenu(null); }}
-            className="w-full px-4 py-2 text-left text-xs hover:bg-gray-100 dark:hover:bg-[#3d3d3d] text-gray-700 dark:text-gray-300"
+            className="w-full px-4 py-2 text-left text-xs hover:bg-[#333333] text-[#E5E5E5]"
           >
             ✂️ Cut
           </button>
           <button
             onClick={() => { handlePaste(); setContextMenu(null); }}
-            className="w-full px-4 py-2 text-left text-xs hover:bg-gray-100 dark:hover:bg-[#3d3d3d] text-gray-700 dark:text-gray-300"
+            className="w-full px-4 py-2 text-left text-xs hover:bg-[#333333] text-[#E5E5E5]"
           >
             📝 Paste
           </button>
-          <div className="border-t border-gray-200 dark:border-gray-700"></div>
+          <div className="border-t border-[#3B3B3B]"></div>
           <button
             onClick={() => { handleDelete(); setContextMenu(null); }}
-            className="w-full px-4 py-2 text-left text-xs hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400"
+            className="w-full px-4 py-2 text-left text-xs hover:bg-red-900/20 text-red-400"
           >
             🗑️ Delete
           </button>
