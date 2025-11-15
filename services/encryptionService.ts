@@ -9,7 +9,7 @@
  */
 class EncryptionService {
   private encryptionKey: CryptoKey | null = null;
-  private isEncryptionEnabled: boolean = false;
+  private encryptionEnabled: boolean = false;
 
   /**
    * Initialize encryption with a password
@@ -42,7 +42,7 @@ class EncryptionService {
         ['encrypt', 'decrypt']
       );
 
-      this.isEncryptionEnabled = true;
+      this.encryptionEnabled = true;
       localStorage.setItem('encryption_enabled', 'true');
     } catch (error) {
       console.error('Failed to initialize encryption:', error);
@@ -54,7 +54,7 @@ class EncryptionService {
    * Encrypt data
    */
   async encrypt(data: string): Promise<string> {
-    if (!this.isEncryptionEnabled || !this.encryptionKey) {
+    if (!this.encryptionEnabled || !this.encryptionKey) {
       return data; // Return unencrypted if encryption not enabled
     }
 
@@ -91,7 +91,7 @@ class EncryptionService {
    * Decrypt data
    */
   async decrypt(encryptedData: string): Promise<string> {
-    if (!this.isEncryptionEnabled || !this.encryptionKey) {
+    if (!this.encryptionEnabled || !this.encryptionKey) {
       return encryptedData; // Return as-is if encryption not enabled
     }
 
@@ -154,7 +154,7 @@ class EncryptionService {
    * Enable/disable encryption
    */
   setEncryptionEnabled(enabled: boolean): void {
-    this.isEncryptionEnabled = enabled;
+    this.encryptionEnabled = enabled;
     localStorage.setItem('encryption_enabled', String(enabled));
   }
 
@@ -171,10 +171,9 @@ class EncryptionService {
    */
   clearEncryption(): void {
     this.encryptionKey = null;
-    this.isEncryptionEnabled = false;
+    this.encryptionEnabled = false;
     localStorage.removeItem('encryption_enabled');
   }
 }
 
 export const encryptionService = new EncryptionService();
-
